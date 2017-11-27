@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+
+"""
+Python 3.5+ script for determining the imports in Python files in a certain folder.
+The script recurses the directory for Python files, and outputs JSON, listing
+the imports per filetype.
+
+The script uses a regex to determine import statements. Using the :mod:`ast` module
+is an option as well, however then one would be bound to the version of the interpreter
+that is used by this script.
+"""
+
+import argparse
+import itertools
+import json
+import os
+from pathlib import Path
+import re
+import sys
+
+
+FILTER = {
+    'argparse', 'ast', 'base64', 'builtins', 'cStringIO', 'datetime', 'collections', 'csv', 'imp', 'glob', 'gzip', 'json', 'logging', 'math', 'optparse',
+    'os', 'pprint', 'random',
+    're', 'shutil', 'StringIO', 'subprocess', 'sys', 'tarfile', 'tempfile', 'threading', 'time',
+    'unittest', 'urllib', 'urllib2', 'urlparse'
+}
+"""Stdlib packages. Incomplete."""
+
+REGEX = re.compile('(?m)^(?:from[ ]+(\S+)[ ]+)?import[ ]+(\S+)(?:[ ]+as[ ]+\S+)?[ ]*$')
+# https://stackoverflow.com/questions/44988487/regex-to-parse-import-statements-in-python
+
+def get_imports_from_text(text):
+    for line in text.split('\n'):
+        match = REGEX.match(line)
+        if match is not None:
+            groups = list(match.groups())
+            if None in groups:
+                groups.remove(None)
+            yield groups[0]
+
+
+def get_imports_from_file(filename):
+    with open(filename, 'r') as f:
+        text = f.read()
+    imports = get_imports_from_text(text)
+    return imports
+
+
+def _filter_stdlib(imports):
+    for i in imports:
+        if i not in FILTER:
+            yield i
+
+def _filter_after_dot(imports):
+    for i in imports:
+        yield i.split('.')[0]
+
+
+_EPILOG = r"""
+To check a single file:
+
+    get-python-imports myfile
+
+To check multiple files:
+
+    get-python-imports myfile1 myfile2
+
+To check recursively, assuming Bash 4 globstar '**' feature:
+
+    get-python-imports path/to/files/**/*.py
+
+
+"""
+
+def main():
+
+    parser = argparse.ArgumentParser(description='Determine packages that are imported.', epilog=_EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('scripts', type=str, help='File or folder', nargs='+')
+    parser.add_argument('-e', '--exclude-stdlib', help='Exclude stdlib libraries.', action='store_true', default=False)
+    parser.add_argument('-t', '--total', help='Do not group by file.', action='store_true', default=False)
+    parser.add_argument('-p', '--only-packages', help='Only direct modules/packages, drop what is after dot.', action='store_true', default=False)
+
+    args = parser.parse_args()
+
+    files = filter(lambda x: x.is_file(), map(Path, args.scripts))
+
+    imports = {str(filename): list(get_imports_from_file(filename)) for filename in files}
+
+    # Drop what is after dot.
+    if args.only_packages:
+        imports = {k: list(_filter_after_dot(v)) for k, v in imports.items()}
+
+    # Drop stdlib
+    if args.exclude_stdlib:
+        imports = {k: list(_filter_stdlib(v)) for k, v in imports.items()}
+
+    # Do not group per file
+    if args.total:
+        imports = sorted(list(set(list(itertools.chain(*imports.values())))))
+
+
+    sys.stdout.write(json.dumps(imports, indent=4))
+
+
+if __name__ == '__main__':
+    main()
